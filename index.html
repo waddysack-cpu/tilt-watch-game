@@ -44,6 +44,11 @@
   }
   let listening = false;
   async function startMotion() {
+    if (!listening) {
+      addEventListener('deviceorientation', onOrient);
+      addEventListener('devicemotion', onMotion);
+      listening = true;
+    }
     try {
       if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function')
         await DeviceOrientationEvent.requestPermission();
@@ -52,11 +57,6 @@
       if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function')
         await DeviceMotionEvent.requestPermission();
     } catch (e) {}
-    if (!listening) {
-      addEventListener('deviceorientation', onOrient);
-      addEventListener('devicemotion', onMotion);
-      listening = true;
-    }
   }
   function calibrate() { base = raw ? { a: raw.a, b: raw.b } : null; }
 
@@ -142,7 +142,8 @@
       return;
     }
     if (state !== 'play') return;
-    // fall back to touch if tilt stops reporting
+    // switch to tilt as soon as sensor readings arrive (e.g. after a late permission OK)
+    if (mode === 'touch' && motionSeen > 2 && !finger) { mode = 'tilt'; calibrate(); }
     readSteer();
     const acc = S * 2.6, fr = Math.pow(0.25, dt);
     ball.vx = (ball.vx + tx * acc * dt) * fr;
