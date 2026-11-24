@@ -8,8 +8,8 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
-  canvas { display: block; width: 100vw; height: 100vh; }
-  #go { position: fixed; left: 18%; right: 18%; top: 66%; height: 15%; border: 0; border-radius: 99px;
+  canvas { display: block; position: fixed; left: 0; top: 0; }
+  #go { position: fixed; left: 18%; right: 18%; top: 62%; height: 34px; border: 0; border-radius: 99px;
     background: #30d158; color: #000; font: 700 17px -apple-system, system-ui, sans-serif; }
   #go[hidden] { display: none; }
 </style>
@@ -25,7 +25,10 @@
     const d = window.devicePixelRatio || 1;
     W = innerWidth; H = innerHeight; S = Math.min(W, H);
     cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';   // match the visible area exactly
     PAD = S * 0.07;                       // keep play area clear of the rounded corners
+    const g = document.getElementById('go');
+    if (g) { g.style.top = Math.round(H * 0.62) + 'px'; g.style.height = Math.round(H * 0.17) + 'px'; }
   }
   addEventListener('resize', resize); resize();
 
@@ -55,24 +58,23 @@
       listening = true;
     }
   }
-  // Apple only allows the permission prompt from a finished tap (touchend / click),
-  // and both requests must be sent in the same tap, before any await.
-  function askPermission() {
+  // Same order as the test page that did get a prompt on the watch:
+  // motion permission first, straight from the button tap, then orientation.
+  async function askPermission() {
     startMotion();
     if (asked) return; asked = true;
-    const reqs = [];
+    let m = '-', o = '-';
+    motionStatus = 'sensor: asking…';
+    try {
+      if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function')
+        m = await DeviceMotionEvent.requestPermission();
+    } catch (e) { m = 'err ' + (e.name || e.message); }
     try {
       if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function')
-        reqs.push(DeviceOrientationEvent.requestPermission());
-      if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function')
-        reqs.push(DeviceMotionEvent.requestPermission());
-    } catch (e) { motionStatus = 'sensor: ' + e.message; }
-    if (!reqs.length) { if (motionStatus === 'sensor: not started') motionStatus = 'sensor: no prompt needed'; return; }
-    motionStatus = 'sensor: asking…';
-    Promise.all(reqs.map(p => p.catch(e => 'error'))).then(r => {
-      motionStatus = 'sensor: ' + r.join('/');
-      if (r.includes('denied') || r.includes('error')) asked = false;   // allow another try
-    });
+        o = await DeviceOrientationEvent.requestPermission();
+    } catch (e) { o = 'err ' + (e.name || e.message); }
+    if (!motionSeen) motionStatus = 'sensor: motion ' + m + ', orient ' + o;
+    if (m !== 'granted' && o !== 'granted') asked = false;   // allow another try next tap
   }
   function calibrate() { base = raw ? { a: raw.a, b: raw.b } : null; }
 
@@ -139,7 +141,12 @@
   cv.addEventListener('mousedown', e => { if (state === 'play') press(e.clientX, e.clientY); });
   // a real <button> is the only thing the watch accepts for the motion permission prompt
   const go = document.getElementById('go');
-  go.addEventListener('click', () => { askPermission(); press(W / 2, H / 2); });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    await askPermission();                 // wait for the prompt to be answered before starting
+    go.disabled = false;
+    press(W / 2, H / 2);
+  });
   cv.addEventListener('mousemove', e => { if (finger) finger = { x: e.clientX, y: e.clientY }; });
   addEventListener('mouseup', () => finger = null);
   addEventListener('keydown', e => {
@@ -210,10 +217,10 @@
     if (flash > 0) { ctx.fillStyle = '#000'; ctx.globalAlpha = 1 - flash * 2; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
 
     if (state === 'title' || state === 'wait') {
-      text('TILT', W / 2, H * 0.3, S * 0.2, '#fff', 800);
-      text('roll the ball to the gold', W / 2, H * 0.48, S * 0.068, '#aaa');
-      text('dodge the red', W / 2, H * 0.57, S * 0.068, '#ff453a');
-      if (state === 'wait') text('hold still…', W / 2, H * 0.74, S * 0.075, '#30d158');
+      text('TILT', W / 2, H * 0.2, S * 0.2, '#fff', 800);
+      text('roll the ball to the gold', W / 2, H * 0.38, S * 0.068, '#aaa');
+      text('dodge the red', W / 2, H * 0.48, S * 0.068, '#ff453a');
+      if (state === 'wait') text('hold still…', W / 2, H * 0.7, S * 0.075, '#30d158');
       text((best ? 'best ' + best + ' · ' : '') + motionStatus, W / 2, H * 0.9, S * 0.05, '#555');
       return;
     }
