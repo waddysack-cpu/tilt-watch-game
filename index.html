@@ -9,10 +9,14 @@
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
   canvas { display: block; width: 100vw; height: 100vh; }
+  #go { position: fixed; left: 18%; right: 18%; top: 66%; height: 15%; border: 0; border-radius: 99px;
+    background: #30d158; color: #000; font: 700 17px -apple-system, system-ui, sans-serif; }
+  #go[hidden] { display: none; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<button id="go">Start</button>
 <script>
 (function () {
   const cv = document.getElementById('c'), ctx = cv.getContext('2d');
@@ -129,11 +133,13 @@
     }
     finger = { x, y };
   }
-  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; press(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchstart', e => { e.preventDefault(); if (state !== 'play') return; const t = e.changedTouches[0]; press(t.clientX, t.clientY); }, { passive: false });
   cv.addEventListener('touchmove', e => { e.preventDefault(); const t = e.changedTouches[0]; if (finger) finger = { x: t.clientX, y: t.clientY }; }, { passive: false });
-  cv.addEventListener('touchend', e => { askPermission(); e.preventDefault(); finger = null; }, { passive: false });
-  cv.addEventListener('click', askPermission);
-  cv.addEventListener('mousedown', e => press(e.clientX, e.clientY));
+  cv.addEventListener('touchend', e => { e.preventDefault(); finger = null; }, { passive: false });
+  cv.addEventListener('mousedown', e => { if (state === 'play') press(e.clientX, e.clientY); });
+  // a real <button> is the only thing the watch accepts for the motion permission prompt
+  const go = document.getElementById('go');
+  go.addEventListener('click', () => { askPermission(); press(W / 2, H / 2); });
   cv.addEventListener('mousemove', e => { if (finger) finger = { x: e.clientX, y: e.clientY }; });
   addEventListener('mouseup', () => finger = null);
   addEventListener('keydown', e => {
@@ -207,9 +213,8 @@
       text('TILT', W / 2, H * 0.3, S * 0.2, '#fff', 800);
       text('roll the ball to the gold', W / 2, H * 0.48, S * 0.068, '#aaa');
       text('dodge the red', W / 2, H * 0.57, S * 0.068, '#ff453a');
-      text(state === 'wait' ? 'hold still…' : 'hold wrist flat, tap', W / 2, H * 0.74, S * 0.075, '#30d158');
-      if (best) text('best ' + best, W / 2, H * 0.84, S * 0.06, '#666');
-      text(motionStatus, W / 2, H * 0.92, S * 0.05, '#555');
+      if (state === 'wait') text('hold still…', W / 2, H * 0.74, S * 0.075, '#30d158');
+      text((best ? 'best ' + best + ' · ' : '') + motionStatus, W / 2, H * 0.9, S * 0.05, '#555');
       return;
     }
     arena();
@@ -233,15 +238,17 @@
       ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
       text('score ' + score, W / 2, H * 0.36, S * 0.13, '#fff', 800);
       text('best ' + best, W / 2, H * 0.52, S * 0.075, '#aaa');
-      text('tap to retry', W / 2, H * 0.7, S * 0.075, '#30d158');
-      text(motionStatus, W / 2, H * 0.84, S * 0.05, '#666');
+      text(motionStatus, W / 2, H * 0.9, S * 0.05, '#666');
     }
   }
 
   let last;
   function loop(now) {
     const dt = last ? Math.min(0.05, (now - last) / 1000) : 0; last = now;
-    update(dt); draw(now); requestAnimationFrame(loop);
+    update(dt); draw(now);
+    const showGo = state === 'title' || (state === 'over' && now - deadT > 700);
+    if (go.hidden === showGo) { go.hidden = !showGo; go.textContent = state === 'over' ? 'Retry' : 'Start'; }
+    requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
   window.__tilt = { get state() { return state; }, get mode() { return mode; }, get score() { return score; } };
