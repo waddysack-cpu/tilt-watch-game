@@ -33,30 +33,42 @@
   const keys = {};
 
   function onOrient(e) {
-    if (e.beta == null || e.gamma == null) return;
-    motionSeen++; raw = { a: e.gamma, b: e.beta, src: 'o' };
+    if (e.beta == null || e.gamma == null) { motionStatus = 'sensor: empty readings'; return; }
+    motionSeen++; motionStatus = 'sensor: working'; raw = { a: e.gamma, b: e.beta, src: 'o' };
   }
   function onMotion(e) {
     if (raw && raw.src === 'o') return;    // prefer orientation if we have it
     const g = e.accelerationIncludingGravity;
-    if (!g || g.x == null) return;
-    motionSeen++; raw = { a: g.x * 9, b: -g.y * 9, src: 'm' };   // roughly degrees-like
+    if (!g || g.x == null) { if (!motionSeen) motionStatus = 'sensor: empty readings'; return; }
+    motionSeen++; motionStatus = 'sensor: working'; raw = { a: g.x * 9, b: -g.y * 9, src: 'm' };   // roughly degrees-like
   }
-  let listening = false;
-  async function startMotion() {
+  let listening = false, asked = false;
+  let motionStatus = (window.DeviceOrientationEvent || window.DeviceMotionEvent) ? 'sensor: not started' : 'sensor: no API';
+  function startMotion() {
     if (!listening) {
       addEventListener('deviceorientation', onOrient);
       addEventListener('devicemotion', onMotion);
       listening = true;
     }
+  }
+  // Apple only allows the permission prompt from a finished tap (touchend / click),
+  // and both requests must be sent in the same tap, before any await.
+  function askPermission() {
+    startMotion();
+    if (asked) return; asked = true;
+    const reqs = [];
     try {
       if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function')
-        await DeviceOrientationEvent.requestPermission();
-    } catch (e) {}
-    try {
+        reqs.push(DeviceOrientationEvent.requestPermission());
       if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function')
-        await DeviceMotionEvent.requestPermission();
-    } catch (e) {}
+        reqs.push(DeviceMotionEvent.requestPermission());
+    } catch (e) { motionStatus = 'sensor: ' + e.message; }
+    if (!reqs.length) { if (motionStatus === 'sensor: not started') motionStatus = 'sensor: no prompt needed'; return; }
+    motionStatus = 'sensor: asking…';
+    Promise.all(reqs.map(p => p.catch(e => 'error'))).then(r => {
+      motionStatus = 'sensor: ' + r.join('/');
+      if (r.includes('denied') || r.includes('error')) asked = false;   // allow another try
+    });
   }
   function calibrate() { base = raw ? { a: raw.a, b: raw.b } : null; }
 
@@ -110,7 +122,7 @@
       startMotion();
       if (state === 'title') {
         // give the sensors a moment to report, then decide the control mode
-        state = 'wait'; waitT = 0.7;
+        state = 'wait'; waitT = 1.2;
         return;
       }
       newGame(); return;
@@ -119,7 +131,8 @@
   }
   cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; press(t.clientX, t.clientY); }, { passive: false });
   cv.addEventListener('touchmove', e => { e.preventDefault(); const t = e.changedTouches[0]; if (finger) finger = { x: t.clientX, y: t.clientY }; }, { passive: false });
-  cv.addEventListener('touchend', e => { e.preventDefault(); finger = null; }, { passive: false });
+  cv.addEventListener('touchend', e => { askPermission(); e.preventDefault(); finger = null; }, { passive: false });
+  cv.addEventListener('click', askPermission);
   cv.addEventListener('mousedown', e => press(e.clientX, e.clientY));
   cv.addEventListener('mousemove', e => { if (finger) finger = { x: e.clientX, y: e.clientY }; });
   addEventListener('mouseup', () => finger = null);
@@ -195,7 +208,8 @@
       text('roll the ball to the gold', W / 2, H * 0.48, S * 0.068, '#aaa');
       text('dodge the red', W / 2, H * 0.57, S * 0.068, '#ff453a');
       text(state === 'wait' ? 'hold still…' : 'hold wrist flat, tap', W / 2, H * 0.74, S * 0.075, '#30d158');
-      if (best) text('best ' + best, W / 2, H * 0.86, S * 0.06, '#666');
+      if (best) text('best ' + best, W / 2, H * 0.84, S * 0.06, '#666');
+      text(motionStatus, W / 2, H * 0.92, S * 0.05, '#555');
       return;
     }
     arena();
@@ -220,6 +234,7 @@
       text('score ' + score, W / 2, H * 0.36, S * 0.13, '#fff', 800);
       text('best ' + best, W / 2, H * 0.52, S * 0.075, '#aaa');
       text('tap to retry', W / 2, H * 0.7, S * 0.075, '#30d158');
+      text(motionStatus, W / 2, H * 0.84, S * 0.05, '#666');
     }
   }
 
