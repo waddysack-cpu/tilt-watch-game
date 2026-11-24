@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="disabled-adaptations" content="watch">
+<title>Tilt</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  let W, H, S, PAD;
+  function resize() {
+    const d = window.devicePixelRatio || 1;
+    W = innerWidth; H = innerHeight; S = Math.min(W, H);
+    cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+    PAD = S * 0.07;                       // keep play area clear of the rounded corners
+  }
+  addEventListener('resize', resize); resize();
+
+  // ---------- input ----------
+  // mode: 'tilt' (motion sensors) or 'touch' (hold finger, ball rolls toward it)
+  let mode = 'touch', motionSeen = 0, raw = null, base = null;
+  let tx = 0, ty = 0;                      // current steering, -1..1
+  let finger = null;                       // {x, y} while touching
+  const keys = {};
+
+  function onOrient(e) {
+    if (e.beta == null || e.gamma == null) return;
+    motionSeen++; raw = { a: e.gamma, b: e.beta, src: 'o' };
+  }
+  function onMotion(e) {
+    if (raw && raw.src === 'o') return;    // prefer orientation if we have it
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x == null) return;
+    motionSeen++; raw = { a: g.x * 9, b: -g.y * 9, src: 'm' };   // roughly degrees-like
+  }
+  let listening = false;
+  async function startMotion() {
+    try {
+      if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function')
+        await DeviceOrientationEvent.requestPermission();
+    } catch (e) {}
+    try {
+      if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function')
+        await DeviceMotionEvent.requestPermission();
+    } catch (e) {}
+    if (!listening) {
+      addEventListener('deviceorientation', onOrient);
+      addEventListener('devicemotion', onMotion);
+      listening = true;
+    }
+  }
+  function calibrate() { base = raw ? { a: raw.a, b: raw.b } : null; }
+
+  function readSteer() {
+    if (mode === 'tilt' && raw && base) {
+      const k = 18;                        // degrees of tilt for full speed
+      tx = clamp((raw.a - base.a) / k, -1, 1);
+      ty = clamp((raw.b - base.b) / k, -1, 1);
+      return;
+    }
+    let x = 0, y = 0;
+    if (finger) {
+      const dx = finger.x - ball.x, dy = finger.y - ball.y, d = Math.hypot(dx, dy) || 1;
+      const m = Math.min(1, d / (S * 0.25));
+      x = dx / d * m; y = dy / d * m;
+    }
+    if (keys.ArrowLeft) x -= 1; if (keys.ArrowRight) x += 1;
+    if (keys.ArrowUp) y -= 1; if (keys.ArrowDown) y += 1;
+    tx = clamp(x, -1, 1); ty = clamp(y, -1, 1);
+  }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // ---------- game ----------
+  let state = 'title', score = 0, best = 0, ball, coin, hazards, t0, deadT, flash = 0, waitT = 0;
+  try { best = +localStorage.getItem('tiltBest') || 0; } catch (e) {}
+
+  function rndSpot(minDist) {
+    for (let i = 0; i < 50; i++) {
+      const p = { x: PAD + S * 0.06 + Math.random() * (W - 2 * PAD - S * 0.12),
+                  y: PAD + S * 0.06 + Math.random() * (H - 2 * PAD - S * 0.12) };
+      if (!ball || Math.hypot(p.x - ball.x, p.y - ball.y) > minDist) return p;
+    }
+    return { x: W / 2, y: H / 2 };
+  }
+  function addHazard() {
+    const p = rndSpot(S * 0.45), a = Math.random() * Math.PI * 2, sp = S * (0.28 + Math.random() * 0.12);
+    hazards.push({ x: p.x, y: p.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: S * 0.045, born: 0 });
+  }
+  function newGame() {
+    score = 0; hazards = [];
+    ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, r: S * 0.055 };
+    coin = rndSpot(S * 0.3);
+    addHazard();
+    state = 'play'; t0 = performance.now();
+    calibrate();
+  }
+
+  function press(x, y) {
+    if (state === 'title' || state === 'over') {
+      if (state === 'over' && performance.now() - deadT < 700) return;
+      startMotion();
+      if (state === 'title') {
+        // give the sensors a moment to report, then decide the control mode
+        state = 'wait'; waitT = 0.7;
+        return;
+      }
+      newGame(); return;
+    }
+    finger = { x, y };
+  }
+  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; press(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('touchmove', e => { e.preventDefault(); const t = e.changedTouches[0]; if (finger) finger = { x: t.clientX, y: t.clientY }; }, { passive: false });
+  cv.addEventListener('touchend', e => { e.preventDefault(); finger = null; }, { passive: false });
+  cv.addEventListener('mousedown', e => press(e.clientX, e.clientY));
+  cv.addEventListener('mousemove', e => { if (finger) finger = { x: e.clientX, y: e.clientY }; });
+  addEventListener('mouseup', () => finger = null);
+  addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (e.code === 'Space' && state !== 'play') press(W / 2, H / 2);
+  });
+  addEventListener('keyup', e => keys[e.key] = false);
+
+  function die() {
+    state = 'over'; deadT = performance.now(); finger = null;
+    if (score > best) { best = score; try { localStorage.setItem('tiltBest', best); } catch (e) {} }
+    if (navigator.vibrate) try { navigator.vibrate(120); } catch (e) {}
+  }
+
+  function update(dt) {
+    if (state === 'wait') {
+      waitT -= dt;
+      if (waitT <= 0) { mode = motionSeen > 2 ? 'tilt' : 'touch'; newGame(); }
+      return;
+    }
+    if (state !== 'play') return;
+    // fall back to touch if tilt stops reporting
+    readSteer();
+    const acc = S * 2.6, fr = Math.pow(0.25, dt);
+    ball.vx = (ball.vx + tx * acc * dt) * fr;
+    ball.vy = (ball.vy + ty * acc * dt) * fr;
+    ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+    const l = PAD + ball.r, r = W - PAD - ball.r, t = PAD + ball.r, b = H - PAD - ball.r;
+    if (ball.x < l) { ball.x = l; ball.vx *= -0.4; } if (ball.x > r) { ball.x = r; ball.vx *= -0.4; }
+    if (ball.y < t) { ball.y = t; ball.vy *= -0.4; } if (ball.y > b) { ball.y = b; ball.vy *= -0.4; }
+
+    const speedUp = 1 + score * 0.03;
+    for (const h of hazards) {
+      h.born += dt;
+      h.x += h.vx * dt * speedUp; h.y += h.vy * dt * speedUp;
+      if (h.x < PAD + h.r || h.x > W - PAD - h.r) { h.vx *= -1; h.x = clamp(h.x, PAD + h.r, W - PAD - h.r); }
+      if (h.y < PAD + h.r || h.y > H - PAD - h.r) { h.vy *= -1; h.y = clamp(h.y, PAD + h.r, H - PAD - h.r); }
+      // new hazards are harmless for their first 0.8 s (they fade in)
+      if (h.born > 0.8 && Math.hypot(h.x - ball.x, h.y - ball.y) < h.r + ball.r * 0.85) return die();
+    }
+    if (Math.hypot(coin.x - ball.x, coin.y - ball.y) < ball.r + S * 0.045) {
+      score++; flash = 0.25;
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch (e) {}
+      coin = rndSpot(S * 0.3);
+      if (score % 4 === 0 && hazards.length < 7) addHazard();
+    }
+    flash = Math.max(0, flash - dt);
+  }
+
+  // ---------- draw ----------
+  function text(t, x, y, size, color, weight) {
+    ctx.fillStyle = color; ctx.font = (weight || 600) + ' ' + size + 'px -apple-system, system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t, x, y);
+  }
+  function circle(x, y, r, c) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+  function arena() {
+    ctx.strokeStyle = '#222'; ctx.lineWidth = 2;
+    const rr = S * 0.12;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(PAD, PAD, W - 2 * PAD, H - 2 * PAD, rr); else ctx.rect(PAD, PAD, W - 2 * PAD, H - 2 * PAD);
+    ctx.stroke();
+  }
+
+  function draw(now) {
+    ctx.fillStyle = flash > 0 ? 'rgba(255,214,10,' + (flash * 0.5) + ')' : '#000';
+    ctx.fillRect(0, 0, W, H);
+    if (flash > 0) { ctx.fillStyle = '#000'; ctx.globalAlpha = 1 - flash * 2; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+
+    if (state === 'title' || state === 'wait') {
+      text('TILT', W / 2, H * 0.3, S * 0.2, '#fff', 800);
+      text('roll the ball to the gold', W / 2, H * 0.48, S * 0.068, '#aaa');
+      text('dodge the red', W / 2, H * 0.57, S * 0.068, '#ff453a');
+      text(state === 'wait' ? 'hold still…' : 'hold wrist flat, tap', W / 2, H * 0.74, S * 0.075, '#30d158');
+      if (best) text('best ' + best, W / 2, H * 0.86, S * 0.06, '#666');
+      return;
+    }
+    arena();
+    // coin
+    const pulse = 1 + Math.sin(now / 150) * 0.1;
+    circle(coin.x, coin.y, S * 0.04 * pulse, '#ffd60a');
+    // hazards
+    for (const h of hazards) {
+      ctx.globalAlpha = Math.min(1, 0.25 + h.born);
+      circle(h.x, h.y, h.r, '#ff453a');
+      ctx.globalAlpha = 1;
+    }
+    // ball
+    circle(ball.x, ball.y, ball.r, '#0a84ff');
+    circle(ball.x - ball.r * 0.3, ball.y - ball.r * 0.3, ball.r * 0.3, 'rgba(255,255,255,0.45)');
+    // hud
+    text(String(score), W / 2, PAD + S * 0.08, S * 0.11, 'rgba(255,255,255,0.75)', 800);
+    text(mode === 'tilt' ? 'tilt' : 'touch', W / 2, H - PAD - S * 0.05, S * 0.05, '#444');
+
+    if (state === 'over') {
+      ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
+      text('score ' + score, W / 2, H * 0.36, S * 0.13, '#fff', 800);
+      text('best ' + best, W / 2, H * 0.52, S * 0.075, '#aaa');
+      text('tap to retry', W / 2, H * 0.7, S * 0.075, '#30d158');
+    }
+  }
+
+  let last;
+  function loop(now) {
+    const dt = last ? Math.min(0.05, (now - last) / 1000) : 0; last = now;
+    update(dt); draw(now); requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  window.__tilt = { get state() { return state; }, get mode() { return mode; }, get score() { return score; } };
+})();
+</script>
+</body>
+</html>
